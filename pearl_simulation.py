@@ -64,7 +64,7 @@ def setup_pearl(pearl_position, pearl_motion, tnt_motion, tnt_count):
     """
     tnt_num = (
         torch.tensor(
-            [[-1, 1], [1, 1], [-1, -1]], dtype=torch.int32, device=tnt_motion.device
+            [[-1, 1], [1, 1], [-1, -1]], dtype=torch.float64, device=tnt_motion.device
         )
         @ tnt_count.unsqueeze(1)
     ).squeeze()
@@ -135,7 +135,7 @@ def log_state(tick, pos, vel, yaw):
 if __name__ == "__main__":
     device = get_device()
 
-    tnt_count = torch.tensor([0, 160], dtype=torch.int32, device=device)
+    tnt_count = torch.tensor([0, 160], dtype=torch.float64, device=device)
 
     pearl_position = torch.tensor(
         [-68.0, 200.3548026928415, -33.0],
