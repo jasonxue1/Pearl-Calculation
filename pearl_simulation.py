@@ -102,7 +102,7 @@ def simulate_pearl(
         log_fn(0, pos, vel, yaw)
 
     if tick == 0:
-        return pos, vel, yaw
+        return pos
 
     for current_tick in range(1, tick + 1):
         teleport = 1 if current_tick == to_end_time else 0
@@ -122,7 +122,7 @@ def simulate_pearl(
         if log_fn:
             log_fn(current_tick, pos, vel, yaw)
 
-    return pos, vel, yaw
+    return pos
 
 
 def log_state(tick, pos, vel, yaw):
@@ -164,7 +164,7 @@ if __name__ == "__main__":
         device
     )
 
-    simulate_pearl(
+    pos = simulate_pearl(
         10,
         5,
         True,
@@ -180,3 +180,5 @@ if __name__ == "__main__":
         SCALE,
         COS_OFFSET,
     )
+
+    print(f"final_pos={pos.detach().to('cpu').tolist()}")
