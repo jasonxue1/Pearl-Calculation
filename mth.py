@@ -16,7 +16,9 @@ def build_lut(device: torch.device) -> Tuple[Tensor, Tensor, Tensor, Tensor, Ten
     COS_OFFSET = torch.tensor(16384, dtype=torch.float32, device=device)
 
     i = torch.arange(65536, dtype=torch.float64, device=device)
-    SIN = torch.sin(i * torch.tensor(torch.pi, dtype=torch.float64) * 2.0 / 65536.0)
+    SIN = torch.sin(
+        i * torch.tensor(torch.pi, dtype=torch.float64, device=device) * 2.0 / 65536.0
+    )
     SIN = SIN.to(torch.float32)
 
     return SIN, SCALE, COS_OFFSET, RADIANS_TO_DEGREES, DEGREES_TO_RADIANS
