@@ -1,33 +1,21 @@
 import torch
 
+import base
 import mth
 
 
-def get_device():
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
-
-
-device = get_device()
-
-print("Running on:", device)
-
-
 def simulate_tick(
-    pos,
-    vel,
-    yaw,
-    teleport,
-    GRAVITY,
-    DRAG,
-    RADIANS_TO_DEGREES,
-    DEGREES_TO_RADIANS,
-    SIN,
-    SCALE,
-    COS_OFFSET,
+        pos,
+        vel,
+        yaw,
+        teleport,
+        GRAVITY,
+        DRAG,
+        RADIANS_TO_DEGREES,
+        DEGREES_TO_RADIANS,
+        SIN,
+        SCALE,
+        COS_OFFSET,
 ):
     """
     teleport
@@ -63,33 +51,39 @@ def setup_pearl(pearl_position, pearl_motion, tnt_motion, tnt_count):
     b->(1,-1)
     """
     tnt_num = (
-        torch.tensor(
-            [[-1, 1], [1, 1], [-1, -1]], dtype=torch.float64, device=tnt_motion.device
-        )
-        @ tnt_count.unsqueeze(1)
+            torch.tensor(
+                [[-1, 1], [1, 1], [-1, -1]], dtype=torch.float64, device=tnt_motion.device
+            )
+            @ tnt_count.unsqueeze(1)
     ).squeeze()
-    print(tnt_num)
     vel = tnt_num * tnt_motion + pearl_motion
     yaw = torch.tensor(0, dtype=torch.float32, device=tnt_motion.device)
     return pearl_position, vel, yaw
 
 
 def simulate_pearl(
-    tick,
-    to_end_time=0,
-    log=False,
-    pearl_position=None,
-    pearl_motion=None,
-    tnt_motion=None,
-    tnt_count=None,
-    GRAVITY=None,
-    DRAG=None,
-    RADIANS_TO_DEGREES=None,
-    DEGREES_TO_RADIANS=None,
-    SIN=None,
-    SCALE=None,
-    COS_OFFSET=None,
+        tick,
+        to_end_time=0,
+        log=False,
+        pearl_position=None,
+        pearl_motion=None,
+        tnt_motion=None,
+        tnt_count=None,
+        GRAVITY=None,
+        DRAG=None,
+        RADIANS_TO_DEGREES=None,
+        DEGREES_TO_RADIANS=None,
+        SIN=None,
+        SCALE=None,
+        COS_OFFSET=None,
 ):
+    if tick < 0:
+        raise ValueError("tick must be a nonnegative integer")
+    if to_end_time >= tick:
+        raise ValueError("to_end_time must be less than tick")
+    if to_end_time < 0:
+        raise ValueError("to_end_time must be a nonnegative integer")
+
     pos, vel, yaw = setup_pearl(pearl_position, pearl_motion, tnt_motion, tnt_count)
 
     log_fn = None
@@ -133,7 +127,8 @@ def log_state(tick, pos, vel, yaw):
 
 
 if __name__ == "__main__":
-    device = get_device()
+    device = base.get_device()
+    print("Running on:", device)
 
     tnt_count = torch.tensor([0, 160], dtype=torch.float64, device=device)
 
