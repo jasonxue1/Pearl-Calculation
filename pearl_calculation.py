@@ -1,229 +1,288 @@
-import torch
+import re
+
+import numpy as np
 from tqdm import tqdm
 
-import base
 import mth
+import pearl_simulation as sim
 
 
-def pearl_calculation(
-    max_tnt,
-    max_tick,
-    max_to_end_time,
-    expect_pos,
-    max_distance,
-    pearl_position,
-    pearl_motion,
-    tnt_motion,
-    GRAVITY,
-    DRAG,
-    RADIANS_TO_DEGREES,
-    DEGREES_TO_RADIANS,
-    SIN,
-    SCALE,
-    COS_OFFSET,
-    max_mem_gb=None,
-):
-    device = expect_pos.device
-    dtype = expect_pos.dtype
-    if expect_pos.numel() < 2:
-        raise ValueError("expect_pos must have at least x and z components")
-    expect_xz = expect_pos[:2].to(dtype=dtype, device=device)
+DEFAULT_PEARL_POSITION = np.array([0, 252.71360805009243, 0], dtype=np.float64)
+DEFAULT_PEARL_MOTION = np.array([0, 0.3827286093776437, 0], dtype=np.float64)
+DEFAULT_TNT_MOTION_PER_TNT = np.array(
+    [0.6406475114548377, 0.0000041762421424, 0.6406475114548377], dtype=np.float64
+)
 
-    min_tnt0 = -int(max_tnt[0])
-    min_tnt1 = -int(max_tnt[1])
-    n_tnt0 = int(max_tnt[0]) * 2 + 1
-    n_tnt1 = int(max_tnt[1]) * 2 + 1
-    total_combos = n_tnt0 * n_tnt1
-    max_tick = int(max_tick)
-    max_to_end_time = int(max_to_end_time)
-    if max_tick <= 0:
-        raise ValueError("max_tick must be a positive integer")
-    if max_to_end_time < 0:
-        raise ValueError("max_to_end_time must be a nonnegative integer")
 
-    to_end_times = torch.arange(
-        1, min(max_to_end_time, max_tick - 1) + 1, dtype=torch.int32, device=device
+def _read_target() -> tuple[float, float, int]:
+    while True:
+        raw = input("Input target x z dimension(-1 nether, 1 end): ").strip()
+        parts = [p for p in re.split(r"[\s,;，；]+", raw) if p]
+        if len(parts) != 3:
+            print("Expected 3 values: x z dimension")
+            continue
+        try:
+            x = float(parts[0])
+            z = float(parts[1])
+            dimension = int(parts[2])
+        except ValueError:
+            print("Invalid number format, please retry.")
+            continue
+        if dimension not in (-1, 1):
+            print("Only -1 (nether) and 1 (end) are supported.")
+            continue
+        return x, z, dimension
+
+
+def _read_float(prompt: str) -> float:
+    while True:
+        try:
+            value = float(input(prompt).strip())
+        except ValueError:
+            print("Invalid float, please retry.")
+            continue
+        if value < 0:
+            print("Value must be >= 0.")
+            continue
+        return value
+
+
+def _read_int(prompt: str) -> int:
+    while True:
+        try:
+            value = int(input(prompt).strip())
+        except ValueError:
+            print("Invalid int, please retry.")
+            continue
+        if value < 0:
+            print("Value must be >= 0.")
+            continue
+        return value
+
+
+def calculation(
+    target_x: float,
+    target_z: float,
+    dimension: int,
+    max_error: float,
+    max_tnt: int,
+    max_time: int,
+    chunk_size: int = 256,
+) -> list[dict]:
+    if dimension not in (-1, 1):
+        raise ValueError("dimension must be -1 or 1")
+    if max_tnt < 0 or max_time < 0 or max_error < 0:
+        raise ValueError("max_tnt, max_time, max_error must be nonnegative")
+
+    target_x_sim = target_x
+    target_z_sim = target_z
+    max_error2_sim = max_error * max_error
+    results: list[dict] = []
+    base_pos, base_vel, _ = sim.simulate_tick(
+        DEFAULT_PEARL_POSITION.copy(),
+        DEFAULT_PEARL_MOTION.copy(),
+        np.float32(0),
+        0,
     )
-    in_end_time = torch.arange(0, max_tick, dtype=torch.int32, device=device)
+    if dimension == -1:
+        drag = np.float64(sim.d)
+        gravity = np.float64(sim.g)
+        one_minus_drag = 1.0 - drag
+        gravity_coeff = drag * gravity / one_minus_drag
 
-    drag = DRAG.to(dtype=dtype)
-    one_minus_drag = 1.0 - drag
-    gravity_vec = torch.tensor([0.0, 1.0, 0.0], dtype=dtype, device=device) * GRAVITY.to(dtype)
-    gravity_coef = gravity_vec * drag / one_minus_drag
+        b_values = np.arange(-max_tnt, max_tnt + 1, dtype=np.int32)
+        b_values_f = b_values.astype(np.float64, copy=False)[None, :]
+        b_count = int(b_values.size)
 
-    pre_pow = torch.pow(drag, to_end_times.to(dtype))
-    yaw_decay = torch.pow(
-        torch.tensor(0.8, dtype=torch.float32, device=device), to_end_times
-    )
+        total_combos = (2 * max_tnt + 1) * (2 * max_tnt + 1) * (max_time + 1)
+        progress = tqdm(total=total_combos, desc="search", unit="combo")
+        try:
+            for time in range(max_time + 1):
+                if time == 0:
+                    sum_vel = np.float64(0)
+                else:
+                    drag_pow = drag**time
+                    sum_vel = drag * (1.0 - drag_pow) / one_minus_drag
 
-    post_ticks = in_end_time + 1
-    post_pow = torch.pow(drag, post_ticks.to(dtype))
-    post_s1 = drag * (1.0 - post_pow) / one_minus_drag
-    post_s2 = post_ticks.to(dtype) - drag * (1.0 - post_pow) / one_minus_drag
+                base_x = base_pos[0] + sum_vel * base_vel[0]
+                base_z = base_pos[2] + sum_vel * base_vel[2]
 
-    pos_fixed = torch.tensor([100.5, 50.0, 0.5], dtype=dtype, device=device)
+                coeff_x_a = sum_vel * DEFAULT_TNT_MOTION_PER_TNT[0]
+                coeff_x_b = coeff_x_a
+                coeff_z_a = sum_vel * DEFAULT_TNT_MOTION_PER_TNT[2]
+                coeff_z_b = -coeff_z_a
 
-    def estimate_free_bytes():
-        if device.type == "cuda":
-            free_bytes, _ = torch.cuda.mem_get_info(device)
-            return int(free_bytes * 0.8)
-        return None
+                for start_a in range(-max_tnt, max_tnt + 1, chunk_size):
+                    end_a = min(max_tnt + 1, start_a + chunk_size)
+                    a_values = np.arange(start_a, end_a, dtype=np.int32)
+                    a_values_f = a_values.astype(np.float64, copy=False)[:, None]
 
-    results = []
-    total_time_pairs = int(
-        sum(max_tick - (t.item() + 1) for t in to_end_times)
-    )
-    total = total_combos * total_time_pairs
-    progress = tqdm(total=total, desc="search", unit="combo")
-    try:
-        with torch.no_grad():
-            bytes_per_combo = 1024
-            if device.type == "cuda":
-                mem_bytes = (
-                    int(max_mem_gb * 1024 * 1024 * 1024)
-                    if max_mem_gb is not None
-                    else estimate_free_bytes()
-                )
-            else:
-                if max_mem_gb is None:
-                    raise ValueError("max_mem_gb is required when running on CPU")
-                mem_bytes = int(max_mem_gb * 1024 * 1024 * 1024)
+                    x_grid = base_x + coeff_x_a * a_values_f + coeff_x_b * b_values_f
+                    z_grid = base_z + coeff_z_a * a_values_f + coeff_z_b * b_values_f
 
-            if mem_bytes is not None:
-                chunk_size = max(1, min(total_combos, mem_bytes // bytes_per_combo))
-            else:
-                chunk_size = total_combos
+                    dx = x_grid - target_x_sim
+                    dz = z_grid - target_z_sim
+                    distance2 = dx * dx + dz * dz
 
-            for p3_idx, p3_val in enumerate(to_end_times):
-                d_pow = pre_pow[p3_idx]
+                    matched = np.argwhere(distance2 <= max_error2_sim)
+                    for local_a_idx, b_idx in matched:
+                        a = int(a_values[local_a_idx])
+                        b = int(b_values[b_idx])
 
-                # target_yaw is constant per tnt combo, so yaw approaches it geometrically.
-                for start in range(0, total_combos, chunk_size):
-                    end = min(total_combos, start + chunk_size)
-                    combo_idx = torch.arange(
-                        start, end, dtype=torch.int64, device=device
-                    )
-                    a = combo_idx // n_tnt1 + min_tnt0
-                    b = combo_idx % n_tnt1 + min_tnt1
-                    a_f = a.to(dtype)
-                    b_f = b.to(dtype)
-
-                    tnt_num = torch.stack(
-                        [a_f + b_f, torch.abs(a_f) + torch.abs(b_f), a_f - b_f], dim=1
-                    )
-                    vel0 = tnt_num * tnt_motion + pearl_motion
-                    target_yaw = torch.atan2(vel0[:, 0], vel0[:, 2]) * RADIANS_TO_DEGREES
-                    target_yaw = target_yaw.to(torch.float32)
-                    vel_pre = vel0 * d_pow - gravity_vec * drag * (1.0 - d_pow) / one_minus_drag
-
-                    old_yaw = target_yaw * (1.0 - yaw_decay[p3_idx])
-                    yaw_delta = old_yaw - 90.0
-                    rad = yaw_delta * DEGREES_TO_RADIANS
-                    c = mth.cos(rad, SIN, SCALE, COS_OFFSET)
-                    s = mth.sin(rad, SIN, SCALE)
-
-                    x = vel_pre[:, 0]
-                    y = vel_pre[:, 1]
-                    z = vel_pre[:, 2]
-                    vel_rot = torch.stack([x * c + z * s, y, z * c - x * s], dim=-1)
-
-                    for tick in range(int(p3_val.item()) + 1, max_tick + 1):
-                        in_idx = tick - int(p3_val.item()) - 1
-                        sim_pos = (
-                            pos_fixed
-                            + vel_rot * post_s1[in_idx]
-                            - gravity_coef * post_s2[in_idx]
+                        tnt_y = abs(a) + abs(b)
+                        initial_vy = base_vel[1] + tnt_y * DEFAULT_TNT_MOTION_PER_TNT[1]
+                        y = base_pos[1] + initial_vy * sum_vel - gravity_coeff * (
+                            time - sum_vel
                         )
-                        sim_xz = sim_pos[:, [0, 2]]
-                        diff = sim_xz - expect_xz
-                        dist2 = (diff * diff).sum(dim=-1)
-                        mask = dist2 < (max_distance * max_distance)
 
-                        if mask.any():
-                            idxs = mask.nonzero(as_tuple=False).squeeze(1)
-                            idxs_cpu = idxs.to("cpu")
-                            t0_cpu = a[idxs].to("cpu")
-                            t1_cpu = b[idxs].to("cpu")
-                            pos_cpu = sim_pos[idxs].detach().to("cpu")
-                            dist_cpu = torch.sqrt(dist2[idxs]).to("cpu")
+                        dist = float(np.sqrt(distance2[local_a_idx, b_idx]))
+                        x_out = float(x_grid[local_a_idx, b_idx])
+                        z_out = float(z_grid[local_a_idx, b_idx])
 
-                            for i in range(idxs_cpu.numel()):
+                        results.append(
+                            {
+                                "tnt_count": (a, b),
+                                "time": time,
+                                "distance": dist,
+                                "x": x_out,
+                                "y": float(y),
+                                "z": z_out,
+                            }
+                        )
+
+                    progress.update((end_a - start_a) * b_count)
+        finally:
+            progress.close()
+    else:
+        drag = np.float64(sim.d)
+        gravity = np.float64(sim.g)
+        one_minus_drag = 1.0 - drag
+        gravity_coeff = drag * gravity / one_minus_drag
+        spawn = sim.END_SPAWN_POS
+
+        n_tnt = 2 * max_tnt + 1
+        total_pairs = n_tnt * n_tnt
+        total_time_states = max_time * (max_time + 1) // 2
+        total_combos = total_pairs * total_time_states
+        pair_chunk = min(total_pairs, max(20000, chunk_size * n_tnt))
+
+        post_s1 = np.zeros(max_time + 1, dtype=np.float64)
+        for n in range(1, max_time + 1):
+            drag_pow_n = drag**n
+            post_s1[n] = drag * (1.0 - drag_pow_n) / one_minus_drag
+
+        progress = tqdm(total=total_combos, desc="search", unit="combo")
+        try:
+            for to_end_time in range(1, max_time + 1):
+                drag_pow_t = drag**to_end_time
+                gravity_term_t = drag * gravity * (1.0 - drag_pow_t) / one_minus_drag
+                yaw_steps = to_end_time
+
+                for start in range(0, total_pairs, pair_chunk):
+                    end = min(total_pairs, start + pair_chunk)
+                    idx = np.arange(start, end, dtype=np.int64)
+                    a = (idx // n_tnt).astype(np.int32) - max_tnt
+                    b = (idx % n_tnt).astype(np.int32) - max_tnt
+
+                    a_f = a.astype(np.float64, copy=False)
+                    b_f = b.astype(np.float64, copy=False)
+                    tnt_x = a_f + b_f
+                    tnt_y = np.abs(a_f) + np.abs(b_f)
+                    tnt_z = a_f - b_f
+
+                    vel0_x = base_vel[0] + tnt_x * DEFAULT_TNT_MOTION_PER_TNT[0]
+                    vel0_y = base_vel[1] + tnt_y * DEFAULT_TNT_MOTION_PER_TNT[1]
+                    vel0_z = base_vel[2] + tnt_z * DEFAULT_TNT_MOTION_PER_TNT[2]
+
+                    target_yaw = np.float32(
+                        np.arctan2(vel0_x, vel0_z) * mth.RADIANS_TO_DEGREES
+                    )
+                    yaw = np.zeros_like(target_yaw, dtype=np.float32)
+                    for _ in range(yaw_steps):
+                        yaw += np.float32(0.2) * mth.wrap_degrees(target_yaw - yaw)
+
+                    vel_pre_x = vel0_x * drag_pow_t
+                    vel_pre_y = vel0_y * drag_pow_t - gravity_term_t
+                    vel_pre_z = vel0_z * drag_pow_t
+
+                    rad = np.float32(yaw - np.float32(90.0)) * np.float32(
+                        mth.DEGREES_TO_RADIANS
+                    )
+                    c = mth.cos(rad).astype(np.float64, copy=False)
+                    s = mth.sin(rad).astype(np.float64, copy=False)
+
+                    vel_rot_x = vel_pre_x * c + vel_pre_z * s
+                    vel_rot_y = vel_pre_y
+                    vel_rot_z = vel_pre_z * c - vel_pre_x * s
+
+                    max_end_ticks = max_time - to_end_time
+                    for end_ticks in range(0, max_end_ticks + 1):
+                        time = to_end_time + end_ticks
+                        s1 = post_s1[end_ticks]
+                        x = spawn[0] + vel_rot_x * s1
+                        z = spawn[2] + vel_rot_z * s1
+                        dx = x - target_x_sim
+                        dz = z - target_z_sim
+                        distance2 = dx * dx + dz * dz
+
+                        matched = np.nonzero(distance2 <= max_error2_sim)[0]
+                        if matched.size:
+                            y = (
+                                spawn[1]
+                                + vel_rot_y * s1
+                                - gravity_coeff * (end_ticks - s1)
+                            )
+                            for mi in matched.tolist():
                                 results.append(
                                     {
-                                        "tnt_0": int(t0_cpu[i].item()),
-                                        "tnt_1": int(t1_cpu[i].item()),
-                                        "to_end_time": int(p3_val.item()),
-                                        "tick": int(tick),
-                                        "distance": float(dist_cpu[i].item()),
-                                        "pos": pos_cpu[i].tolist(),
+                                        "tnt_count": (int(a[mi]), int(b[mi])),
+                                        "time": time,
+                                        "to_end_time": to_end_time,
+                                        "distance": float(np.sqrt(distance2[mi])),
+                                        "x": float(x[mi]),
+                                        "y": float(y[mi]),
+                                        "z": float(z[mi]),
                                     }
                                 )
 
-                        progress.update(int(a.numel()))
-    finally:
-        progress.close()
+                        progress.update(end - start)
+        finally:
+            progress.close()
 
-    results.sort(key=lambda item: item["tick"])
+    results.sort(
+        key=lambda item: (
+            item["time"],
+            item.get("to_end_time", 0),
+            item["distance"],
+        )
+    )
     return results
 
 
-if __name__ == "__main__":
-    device = base.get_device()
-    print("Running on:", device)
+def main() -> None:
+    x, z, dimension = _read_target()
+    max_error = _read_float("Input max error: ")
+    max_tnt = _read_int("Input max TNT count: ")
+    max_time = _read_int("Input max time: ")
 
-    max_tnt = (20000, 20000)  # (-1,-1) (1,-1)
-    max_tick = 30
-    max_to_end_time = 30
-    max_distance = 10
-    max_mem_gb = None
-
-    pearl_position = torch.tensor(
-        [-68.0, 200.3548026928415, -33.0],
-        dtype=torch.float64,
-        device=device,
-    )
-
-    pearl_motion = torch.tensor(
-        [0, -0.340740225070415, 0], dtype=torch.float64, device=device
-    )
-
-    tnt_motion_zx_per_tnt = 0.6026793588895138
-    tnt_motion_y_per_tnt = 0.004435058914919521
-
-    tnt_motion = torch.tensor(
-        [tnt_motion_zx_per_tnt, tnt_motion_y_per_tnt, tnt_motion_zx_per_tnt],
-        dtype=torch.float64,
-        device=device,
-    )
-
-    GRAVITY = torch.tensor(0.03, dtype=torch.float64, device=device)
-    DRAG = torch.tensor(0.99, dtype=torch.float32, device=device)
-
-    SIN, SCALE, COS_OFFSET, RADIANS_TO_DEGREES, DEGREES_TO_RADIANS = mth.build_lut(
-        device
-    )
-
-    expect_pos = torch.tensor([15302, 23221], dtype=torch.float64, device=device)
-
-    results = pearl_calculation(
-        max_tnt,
-        max_tick,
-        max_to_end_time,
-        expect_pos,
-        max_distance,
-        pearl_position,
-        pearl_motion,
-        tnt_motion,
-        GRAVITY,
-        DRAG,
-        RADIANS_TO_DEGREES,
-        DEGREES_TO_RADIANS,
-        SIN,
-        SCALE,
-        COS_OFFSET,
-        max_mem_gb,
-    )
+    results = calculation(x, z, dimension, max_error, max_tnt, max_time)
+    top_n = 20
+    top_results = results[:top_n]
 
     print(f"matches={len(results)}")
-    for item in results:
-        print(item)
+    print(f"showing={len(top_results)}")
+    for item in top_results:
+        tnt_count_0, tnt_count_1 = item["tnt_count"]
+        to_end_time_str = (
+            f" to_end_time={item['to_end_time']}" if "to_end_time" in item else ""
+        )
+        print(
+            f"time={item['time']}{to_end_time_str} "
+            f"tnt_count=({tnt_count_0}, {tnt_count_1}) "
+            f"pos=({item['x']:.6f}, {item['y']:.6f}, {item['z']:.6f}) "
+            f"error={item['distance']:.6f}"
+        )
+
+
+if __name__ == "__main__":
+    main()

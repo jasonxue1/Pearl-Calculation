@@ -2,14 +2,13 @@
 name = "Pearl-Calculator"
 version = "0.1.0"
 description = "A pearl calculator"
-requires-python = "==3.12.10"
+requires-python = "==3.13.12"
 dependencies = [
-    "torch==2.2.2",
-    "numpy<2",
-    "tqdm>=4.67.1",
+    "numpy>=2.4.2",
+    "tqdm>=4.67.3",
 ]
 
 [dependency-groups]
 dev = [
-    "ruff>=0.14.13",
+    "ruff>=0.15.2",
 ]
