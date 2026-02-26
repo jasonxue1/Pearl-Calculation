@@ -1,17 +1,19 @@
-import re
-
 import numpy as np
 import torch
 from tqdm import tqdm
 
 import mth
-import pearl_simulation as sim
-
-
-DEFAULT_PEARL_POSITION = np.array([0, 252.71360805009243, 0], dtype=np.float64)
-DEFAULT_PEARL_MOTION = np.array([0, 0.3827286093776437, 0], dtype=np.float64)
-DEFAULT_TNT_MOTION_PER_TNT = np.array(
-    [0.6406475114548377, 0.0000041762421424, 0.6406475114548377], dtype=np.float64
+import simulation as sim
+from common import (
+    DEFAULT_PEARL_MOTION,
+    DEFAULT_PEARL_POSITION,
+    DEFAULT_TNT_MOTION_PER_TNT,
+    print_results,
+    print_info,
+    read_nonnegative_float,
+    read_nonnegative_int,
+    read_target,
+    sort_results,
 )
 
 _SIN_LUT_CACHE: dict[str, torch.Tensor] = {}
@@ -55,52 +57,6 @@ def _torch_cos(v: torch.Tensor, sin_lut: torch.Tensor) -> torch.Tensor:
     )
     idx = torch.remainder(idx, sin_lut.shape[0])
     return sin_lut[idx]
-
-
-def _read_target() -> tuple[float, float, int]:
-    while True:
-        raw = input("Input target x z dimension(-1 nether, 1 end): ").strip()
-        parts = [p for p in re.split(r"[\s,;，；]+", raw) if p]
-        if len(parts) != 3:
-            print("Expected 3 values: x z dimension")
-            continue
-        try:
-            x = float(parts[0])
-            z = float(parts[1])
-            dimension = int(parts[2])
-        except ValueError:
-            print("Invalid number format, please retry.")
-            continue
-        if dimension not in (-1, 1):
-            print("Only -1 (nether) and 1 (end) are supported.")
-            continue
-        return x, z, dimension
-
-
-def _read_float(prompt: str) -> float:
-    while True:
-        try:
-            value = float(input(prompt).strip())
-        except ValueError:
-            print("Invalid float, please retry.")
-            continue
-        if value < 0:
-            print("Value must be >= 0.")
-            continue
-        return value
-
-
-def _read_int(prompt: str) -> int:
-    while True:
-        try:
-            value = int(input(prompt).strip())
-        except ValueError:
-            print("Invalid int, please retry.")
-            continue
-        if value < 0:
-            print("Value must be >= 0.")
-            continue
-        return value
 
 
 def calculation(
@@ -242,6 +198,10 @@ def calculation(
             for to_end_time in range(1, max_time + 1):
                 drag_pow_t = drag_pows[to_end_time]
                 gravity_term_t = drag * gravity * (1.0 - drag_pow_t) / one_minus_drag
+                to_end_s1 = s1_all[to_end_time]
+                to_end_n_float = torch.tensor(
+                    float(to_end_time), dtype=dtype, device=device
+                )
 
                 max_end_ticks = max_time - to_end_time
                 for start in range(0, total_pairs, pair_chunk):
@@ -259,6 +219,13 @@ def calculation(
                     vel0_x = base_vel[0] + tnt_x * tnt_motion[0]
                     vel0_y = base_vel[1] + tnt_y * tnt_motion[1]
                     vel0_z = base_vel[2] + tnt_z * tnt_motion[2]
+                    to_end_x = base_pos[0] + vel0_x * to_end_s1
+                    to_end_y = (
+                        base_pos[1]
+                        + vel0_y * to_end_s1
+                        - gravity_coeff * (to_end_n_float - to_end_s1)
+                    )
+                    to_end_z = base_pos[2] + vel0_z * to_end_s1
 
                     target_yaw = (torch.atan2(vel0_x, vel0_z) * radians_to_degrees).to(
                         torch.float32
@@ -307,6 +274,9 @@ def calculation(
                             x_hit = x[matched]
                             y_hit = y[matched]
                             z_hit = z[matched]
+                            x_end_hit = to_end_x[matched]
+                            y_end_hit = to_end_y[matched]
+                            z_end_hit = to_end_z[matched]
                             d_hit = torch.sqrt(distance2[matched])
 
                             a_cpu = a_hit.to("cpu").tolist()
@@ -314,6 +284,9 @@ def calculation(
                             x_cpu = x_hit.to("cpu").tolist()
                             y_cpu = y_hit.to("cpu").tolist()
                             z_cpu = z_hit.to("cpu").tolist()
+                            xe_cpu = x_end_hit.to("cpu").tolist()
+                            ye_cpu = y_end_hit.to("cpu").tolist()
+                            ze_cpu = z_end_hit.to("cpu").tolist()
                             d_cpu = d_hit.to("cpu").tolist()
 
                             for i in range(len(a_cpu)):
@@ -322,6 +295,9 @@ def calculation(
                                         "tnt_count": (int(a_cpu[i]), int(b_cpu[i])),
                                         "time": time,
                                         "to_end_time": to_end_time,
+                                        "to_end_x": float(xe_cpu[i]),
+                                        "to_end_y": float(ye_cpu[i]),
+                                        "to_end_z": float(ze_cpu[i]),
                                         "distance": float(d_cpu[i]),
                                         "x": float(x_cpu[i]),
                                         "y": float(y_cpu[i]),
@@ -333,41 +309,28 @@ def calculation(
         finally:
             progress.close()
 
-    results.sort(
-        key=lambda item: (
-            item["time"],
-            item.get("to_end_time", 0),
-            item["distance"],
-        )
-    )
+    sort_results(results)
     return results
 
 
 def main() -> None:
-    x, z, dimension = _read_target()
-    max_error = _read_float("Input max error: ")
-    max_tnt = _read_int("Input max TNT count: ")
-    max_time = _read_int("Input max time: ")
-
     device = _get_device()
-    print(f"device={device.type}")
+    print_info(f"device={device.type}")
+    while True:
+        try:
+            x, z, dimension = read_target(default_dimension=-1)
+            max_error = read_nonnegative_float("Input max error", default=10.0)
+            max_tnt = read_nonnegative_int("Input max TNT count", default=10880)
+            max_time = read_nonnegative_int("Input max time", default=20)
 
-    results = calculation(x, z, dimension, max_error, max_tnt, max_time, device=device)
-    top_results = results[:20]
-
-    print(f"matches={len(results)}")
-    print(f"showing={len(top_results)}")
-    for item in top_results:
-        a, b = item["tnt_count"]
-        to_end_time_str = (
-            f" to_end_time={item['to_end_time']}" if "to_end_time" in item else ""
-        )
-        print(
-            f"time={item['time']}{to_end_time_str} "
-            f"tnt_count=({a}, {b}) "
-            f"pos=({item['x']:.6f}, {item['y']:.6f}, {item['z']:.6f}) "
-            f"error={item['distance']:.6f}"
-        )
+            results = calculation(
+                x, z, dimension, max_error, max_tnt, max_time, device=device
+            )
+            print_results(results, top_n=20)
+            print_info("Press Ctrl+C to exit, starting next run...")
+        except KeyboardInterrupt:
+            print("\nExit.")
+            break
 
 
 if __name__ == "__main__":

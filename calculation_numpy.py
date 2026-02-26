@@ -1,63 +1,19 @@
-import re
-
 import numpy as np
 from tqdm import tqdm
 
 import mth
-import pearl_simulation as sim
-
-
-DEFAULT_PEARL_POSITION = np.array([0, 252.71360805009243, 0], dtype=np.float64)
-DEFAULT_PEARL_MOTION = np.array([0, 0.3827286093776437, 0], dtype=np.float64)
-DEFAULT_TNT_MOTION_PER_TNT = np.array(
-    [0.6406475114548377, 0.0000041762421424, 0.6406475114548377], dtype=np.float64
+import simulation as sim
+from common import (
+    DEFAULT_PEARL_MOTION,
+    DEFAULT_PEARL_POSITION,
+    DEFAULT_TNT_MOTION_PER_TNT,
+    print_info,
+    print_results,
+    read_nonnegative_float,
+    read_nonnegative_int,
+    read_target,
+    sort_results,
 )
-
-
-def _read_target() -> tuple[float, float, int]:
-    while True:
-        raw = input("Input target x z dimension(-1 nether, 1 end): ").strip()
-        parts = [p for p in re.split(r"[\s,;，；]+", raw) if p]
-        if len(parts) != 3:
-            print("Expected 3 values: x z dimension")
-            continue
-        try:
-            x = float(parts[0])
-            z = float(parts[1])
-            dimension = int(parts[2])
-        except ValueError:
-            print("Invalid number format, please retry.")
-            continue
-        if dimension not in (-1, 1):
-            print("Only -1 (nether) and 1 (end) are supported.")
-            continue
-        return x, z, dimension
-
-
-def _read_float(prompt: str) -> float:
-    while True:
-        try:
-            value = float(input(prompt).strip())
-        except ValueError:
-            print("Invalid float, please retry.")
-            continue
-        if value < 0:
-            print("Value must be >= 0.")
-            continue
-        return value
-
-
-def _read_int(prompt: str) -> int:
-    while True:
-        try:
-            value = int(input(prompt).strip())
-        except ValueError:
-            print("Invalid int, please retry.")
-            continue
-        if value < 0:
-            print("Value must be >= 0.")
-            continue
-        return value
 
 
 def calculation(
@@ -179,6 +135,7 @@ def calculation(
                 drag_pow_t = drag**to_end_time
                 gravity_term_t = drag * gravity * (1.0 - drag_pow_t) / one_minus_drag
                 yaw_steps = to_end_time
+                to_end_s1 = post_s1[to_end_time]
 
                 for start in range(0, total_pairs, pair_chunk):
                     end = min(total_pairs, start + pair_chunk)
@@ -195,6 +152,13 @@ def calculation(
                     vel0_x = base_vel[0] + tnt_x * DEFAULT_TNT_MOTION_PER_TNT[0]
                     vel0_y = base_vel[1] + tnt_y * DEFAULT_TNT_MOTION_PER_TNT[1]
                     vel0_z = base_vel[2] + tnt_z * DEFAULT_TNT_MOTION_PER_TNT[2]
+                    to_end_x = base_pos[0] + vel0_x * to_end_s1
+                    to_end_y = (
+                        base_pos[1]
+                        + vel0_y * to_end_s1
+                        - gravity_coeff * (to_end_time - to_end_s1)
+                    )
+                    to_end_z = base_pos[2] + vel0_z * to_end_s1
 
                     target_yaw = np.float32(
                         np.arctan2(vel0_x, vel0_z) * mth.RADIANS_TO_DEGREES
@@ -240,6 +204,9 @@ def calculation(
                                         "tnt_count": (int(a[mi]), int(b[mi])),
                                         "time": time,
                                         "to_end_time": to_end_time,
+                                        "to_end_x": float(to_end_x[mi]),
+                                        "to_end_y": float(to_end_y[mi]),
+                                        "to_end_z": float(to_end_z[mi]),
                                         "distance": float(np.sqrt(distance2[mi])),
                                         "x": float(x[mi]),
                                         "y": float(y[mi]),
@@ -251,39 +218,24 @@ def calculation(
         finally:
             progress.close()
 
-    results.sort(
-        key=lambda item: (
-            item["time"],
-            item.get("to_end_time", 0),
-            item["distance"],
-        )
-    )
+    sort_results(results)
     return results
 
 
 def main() -> None:
-    x, z, dimension = _read_target()
-    max_error = _read_float("Input max error: ")
-    max_tnt = _read_int("Input max TNT count: ")
-    max_time = _read_int("Input max time: ")
+    while True:
+        try:
+            x, z, dimension = read_target(default_dimension=-1)
+            max_error = read_nonnegative_float("Input max error", default=10.0)
+            max_tnt = read_nonnegative_int("Input max TNT count", default=10880)
+            max_time = read_nonnegative_int("Input max time", default=20)
 
-    results = calculation(x, z, dimension, max_error, max_tnt, max_time)
-    top_n = 20
-    top_results = results[:top_n]
-
-    print(f"matches={len(results)}")
-    print(f"showing={len(top_results)}")
-    for item in top_results:
-        tnt_count_0, tnt_count_1 = item["tnt_count"]
-        to_end_time_str = (
-            f" to_end_time={item['to_end_time']}" if "to_end_time" in item else ""
-        )
-        print(
-            f"time={item['time']}{to_end_time_str} "
-            f"tnt_count=({tnt_count_0}, {tnt_count_1}) "
-            f"pos=({item['x']:.6f}, {item['y']:.6f}, {item['z']:.6f}) "
-            f"error={item['distance']:.6f}"
-        )
+            results = calculation(x, z, dimension, max_error, max_tnt, max_time)
+            print_results(results, top_n=20)
+            print_info("Press Ctrl+C to exit, starting next run...")
+        except KeyboardInterrupt:
+            print("\nExit.")
+            break
 
 
 if __name__ == "__main__":

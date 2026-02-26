@@ -5,6 +5,7 @@ description = "A pearl calculator"
 requires-python = "==3.12.11"
 dependencies = [
     "numpy<2",
+    "rich>=14.3.3",
     "torch<2.3",
     "tqdm>=4.67.3",
 ]

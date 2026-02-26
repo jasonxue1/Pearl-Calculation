@@ -1,5 +1,12 @@
-.idea
-.venv
 .DS_Store
 *.lock
-__pycache__
+
+.idea/
+.vscode/
+.venv/
+
+__pycache__/
+.pycache/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/

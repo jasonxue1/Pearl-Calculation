@@ -9,11 +9,27 @@ _MAX_ABS_RB = 10880
 _CODE_GROUP_LENGTHS = (3, 3, 1, 4, 4, 4, 4, 1, 3, 3, 2)
 
 # 1-based positions in the 32-bit code.
-_R_MAJOR_BITS = ((1, 340), (2, 680), (3, 1360), (4, 130), (5, 50), (6, 2720), (31, 5440))
+_R_MAJOR_BITS = (
+    (1, 340),
+    (2, 680),
+    (3, 1360),
+    (4, 130),
+    (5, 50),
+    (6, 2720),
+    (31, 5440),
+)
 _R_TENS_BITS = ((8, 10), (9, 20), (10, 40), (11, 80))
 _R_ONES_BITS = ((12, 8), (13, 4), (14, 2), (15, 1))
 
-_B_MAJOR_BITS = ((25, 2720), (26, 50), (27, 130), (28, 1360), (29, 680), (30, 340), (32, 5440))
+_B_MAJOR_BITS = (
+    (25, 2720),
+    (26, 50),
+    (27, 130),
+    (28, 1360),
+    (29, 680),
+    (30, 340),
+    (32, 5440),
+)
 _B_TENS_BITS = ((20, 80), (21, 40), (22, 20), (23, 10))
 _B_ONES_BITS = ((16, 1), (17, 2), (18, 4), (19, 8))
 
@@ -23,9 +39,9 @@ _SIGN_BIT_POS_2 = 24
 # direction (0/1/2/3) -> [x, y] = coeff @ [r, b]
 _COEFF_TABLE = np.array(
     [
-        [[1, 0], [0, 1]],   # 0 -> 00
+        [[1, 0], [0, 1]],  # 0 -> 00
         [[-1, 0], [0, 1]],  # 1 -> 01
-        [[0, -1], [-1, 0]], # 2 -> 10
+        [[0, -1], [-1, 0]],  # 2 -> 10
         [[0, 1], [-1, 0]],  # 3 -> 11
     ],
     dtype=np.int64,
@@ -179,7 +195,9 @@ def code2rb(code: str) -> np.ndarray:
     if len(compact_code) != _BIT_COUNT:
         raise ValueError("code must contain exactly 32 bits")
 
-    bits = np.fromiter((ch == "1" for ch in compact_code), dtype=np.int8, count=_BIT_COUNT)
+    bits = np.fromiter(
+        (ch == "1" for ch in compact_code), dtype=np.int8, count=_BIT_COUNT
+    )
     code0 = int(bits[_SIGN_BIT_POS_1 - 1])
     code1 = int(bits[_SIGN_BIT_POS_2 - 1])
     direction = code0 * 2 + code1
