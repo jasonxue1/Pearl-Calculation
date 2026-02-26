@@ -166,7 +166,9 @@ def calculation(
                 base_z = base_pos[2] + s1_t * base_vel[2]
                 coeff_x = s1_t * tnt_motion[0]
                 coeff_z = s1_t * tnt_motion[2]
-                y_base = base_pos[1] + base_vel[1] * s1_t - gravity_coeff * (t_float - s1_t)
+                y_base = (
+                    base_pos[1] + base_vel[1] * s1_t - gravity_coeff * (t_float - s1_t)
+                )
 
                 for start_a in range(-max_tnt, max_tnt + 1, a_chunk):
                     end_a = min(max_tnt + 1, start_a + a_chunk)
@@ -193,7 +195,9 @@ def calculation(
                         dist_hit = torch.sqrt(distance2[local_a, local_b])
 
                         tnt_y_hit = torch.abs(a_hit) + torch.abs(b_hit)
-                        y_hit = y_base + tnt_y_hit.to(dtype=dtype) * tnt_motion[1] * s1_t
+                        y_hit = (
+                            y_base + tnt_y_hit.to(dtype=dtype) * tnt_motion[1] * s1_t
+                        )
 
                         a_cpu = a_hit.to("cpu").tolist()
                         b_cpu = b_hit.to("cpu").tolist()
@@ -277,7 +281,9 @@ def calculation(
                     for end_ticks in range(0, max_end_ticks + 1):
                         time = to_end_time + end_ticks
                         s1 = s1_all[end_ticks]
-                        n_float = torch.tensor(float(end_ticks), dtype=dtype, device=device)
+                        n_float = torch.tensor(
+                            float(end_ticks), dtype=dtype, device=device
+                        )
 
                         x = spawn[0] + vel_rot_x * s1
                         z = spawn[2] + vel_rot_z * s1
@@ -285,10 +291,16 @@ def calculation(
                         dz = z - target_z_t
                         distance2 = dx * dx + dz * dz
 
-                        matched = torch.nonzero(distance2 <= max_error2_t, as_tuple=False)
+                        matched = torch.nonzero(
+                            distance2 <= max_error2_t, as_tuple=False
+                        )
                         if matched.numel() > 0:
                             matched = matched.flatten()
-                            y = spawn[1] + vel_rot_y * s1 - gravity_coeff * (n_float - s1)
+                            y = (
+                                spawn[1]
+                                + vel_rot_y * s1
+                                - gravity_coeff * (n_float - s1)
+                            )
 
                             a_hit = a[matched]
                             b_hit = b[matched]

@@ -97,7 +97,7 @@ def log_state(
 
 
 if __name__ == "__main__":
-    tnt_count = np.array([10880, 10880], dtype=np.int32)
+    tnt_count = np.array([97, 56], dtype=np.int32)
 
     pearl_position = np.array([0, 252.71360805009243, 0], dtype=np.float64)
 
@@ -107,7 +107,7 @@ if __name__ == "__main__":
         [0.6406475114548377, 0.0000041762421424, 0.6406475114548377], dtype=np.float64
     )
 
-    tick = 10
+    tick = 2
 
     to_end_time = 1
 

@@ -131,8 +131,10 @@ def calculation(
 
                         tnt_y = abs(a) + abs(b)
                         initial_vy = base_vel[1] + tnt_y * DEFAULT_TNT_MOTION_PER_TNT[1]
-                        y = base_pos[1] + initial_vy * sum_vel - gravity_coeff * (
-                            time - sum_vel
+                        y = (
+                            base_pos[1]
+                            + initial_vy * sum_vel
+                            - gravity_coeff * (time - sum_vel)
                         )
 
                         dist = float(np.sqrt(distance2[local_a_idx, b_idx]))
