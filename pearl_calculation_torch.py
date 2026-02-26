@@ -14,6 +14,8 @@ DEFAULT_TNT_MOTION_PER_TNT = np.array(
     [0.6406475114548377, 0.0000041762421424, 0.6406475114548377], dtype=np.float64
 )
 
+_SIN_LUT_CACHE: dict[str, torch.Tensor] = {}
+
 
 def _get_device() -> torch.device:
     if torch.cuda.is_available():
@@ -30,6 +32,29 @@ def _device_dtype(device: torch.device) -> torch.dtype:
 
 def _wrap_degrees(deg: torch.Tensor) -> torch.Tensor:
     return torch.remainder(deg + 180.0, 360.0) - 180.0
+
+
+def _get_sin_lut(device: torch.device) -> torch.Tensor:
+    key = str(device)
+    lut = _SIN_LUT_CACHE.get(key)
+    if lut is None:
+        lut = torch.from_numpy(mth.SIN).to(device=device)
+        _SIN_LUT_CACHE[key] = lut
+    return lut
+
+
+def _torch_sin(v: torch.Tensor, sin_lut: torch.Tensor) -> torch.Tensor:
+    idx = (v.to(torch.float32) * float(mth.SCALE)).to(torch.int64)
+    idx = torch.remainder(idx, sin_lut.shape[0])
+    return sin_lut[idx]
+
+
+def _torch_cos(v: torch.Tensor, sin_lut: torch.Tensor) -> torch.Tensor:
+    idx = (v.to(torch.float32) * float(mth.SCALE) + float(mth.COS_OFFSET)).to(
+        torch.int64
+    )
+    idx = torch.remainder(idx, sin_lut.shape[0])
+    return sin_lut[idx]
 
 
 def _read_target() -> tuple[float, float, int]:
@@ -194,6 +219,7 @@ def calculation(
             progress.close()
     else:
         spawn = torch.tensor(sim.END_SPAWN_POS, dtype=dtype, device=device)
+        sin_lut = _get_sin_lut(device)
         n_tnt = 2 * max_tnt + 1
         total_pairs = n_tnt * n_tnt
         total_time_states = max_time * (max_time + 1) // 2
@@ -242,8 +268,8 @@ def calculation(
                     vel_pre_z = vel0_z * drag_pow_t
 
                     rad = (yaw - 90.0) * degrees_to_radians
-                    c = torch.cos(rad).to(dtype=dtype)
-                    s = torch.sin(rad).to(dtype=dtype)
+                    c = _torch_cos(rad, sin_lut).to(dtype=dtype)
+                    s = _torch_sin(rad, sin_lut).to(dtype=dtype)
                     vel_rot_x = vel_pre_x * c + vel_pre_z * s
                     vel_rot_y = vel_pre_y
                     vel_rot_z = vel_pre_z * c - vel_pre_x * s
