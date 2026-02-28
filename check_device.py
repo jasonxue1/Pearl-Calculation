@@ -10,7 +10,9 @@ def get_device_name() -> str:
 
 
 def main() -> None:
-    print(get_device_name())
+    print(f"device: {get_device_name()}")
+    print(f"torch.__version__: {torch.__version__}")
+    print(f"torch.version.cuda: {torch.version.cuda}")
 
 
 if __name__ == "__main__":
