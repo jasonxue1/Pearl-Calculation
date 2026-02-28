@@ -40,42 +40,41 @@ def _with_default_hint(prompt: str, default: Optional[Union[float, int]]) -> str
 
 def read_target(default_dimension: Optional[int] = None) -> tuple[float, float, int]:
     while True:
-        dim_prompt = "Input target dimension (-1 -> nether, 1 -> end)"
-        dim_prompt = _with_default_hint(dim_prompt, default_dimension)
-        dimension_raw = input(dim_prompt).strip()
-        try:
-            if dimension_raw == "" and default_dimension is not None:
-                dimension = default_dimension
-            else:
-                dimension = int(dimension_raw)
-        except ValueError:
-            print_error("Invalid dimension, please retry.")
-            continue
-        if dimension not in (-1, 1):
-            print_error("Only -1 (nether) and 1 (end) are supported.")
-            continue
+        while True:
+            dim_prompt = "Input target dimension (-1 -> nether, 1 -> end)"
+            dim_prompt = _with_default_hint(dim_prompt, default_dimension)
+            dimension_raw = input(dim_prompt).strip()
+            try:
+                if dimension_raw == "" and default_dimension is not None:
+                    dimension = default_dimension
+                else:
+                    dimension = int(dimension_raw)
+            except ValueError:
+                print_error("Invalid dimension, please retry.")
+                continue
+            if dimension not in (-1, 1):
+                print_error("Only -1 (nether) and 1 (end) are supported.")
+                continue
+            break
 
-        if (
-            len(
-                parts := [
-                    p
-                    for p in re.split(
-                        r"[\s,;，；]+", input("Input target pos [x z]: ").strip()
-                    )
-                    if p
-                ]
-            )
-            != 2
-        ):
-            print_error("Expected 2 values: x z")
-            continue
-        try:
-            x = float(parts[0])
-            z = float(parts[1])
-        except ValueError:
-            print_error("Invalid number format, please retry.")
-            continue
-        return x, z, dimension
+        while True:
+            parts = [
+                p
+                for p in re.split(
+                    r"[\s,;，；]+", input("Input target pos [x z]: ").strip()
+                )
+                if p
+            ]
+            if len(parts) != 2:
+                print_error("Expected 2 values: x z")
+                continue
+            try:
+                x = float(parts[0])
+                z = float(parts[1])
+            except ValueError:
+                print_error("Invalid number format, please retry.")
+                continue
+            return x, z, dimension
 
 
 def read_nonnegative_float(prompt: str, default: Optional[float] = None) -> float:
