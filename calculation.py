@@ -17,6 +17,13 @@ from common import (
 )
 
 _SIN_LUT_CACHE: dict[str, torch.Tensor] = {}
+_DEFAULT_PAIR_CHUNK = 262_144
+_DEFAULT_A_CHUNK = 256
+_AUTO_MEMORY_FRACTION = 0.5
+_A_CHUNK_ALIGNMENT = 32
+_PAIR_CHUNK_ALIGNMENT = 1024
+_MAX_AUTO_A_CHUNK = 4096
+_MAX_AUTO_PAIR_CHUNK = 1_048_576
 
 
 def _get_device() -> torch.device:
@@ -59,6 +66,98 @@ def _torch_cos(v: torch.Tensor, sin_lut: torch.Tensor) -> torch.Tensor:
     return sin_lut[idx]
 
 
+def _dtype_nbytes(dtype: torch.dtype) -> int:
+    return int(torch.empty((), dtype=dtype).element_size())
+
+
+def _align_chunk(value: int, alignment: int) -> int:
+    if value <= 1:
+        return 1
+    if value < alignment:
+        return value
+    return max(alignment, (value // alignment) * alignment)
+
+
+def _get_available_device_memory(device: torch.device) -> int | None:
+    try:
+        if device.type == "cuda":
+            with torch.cuda.device(device):
+                free_bytes, _ = torch.cuda.mem_get_info()
+            return int(free_bytes)
+
+        if device.type == "mps" and hasattr(torch, "mps"):
+            if hasattr(torch.mps, "recommended_max_memory"):
+                limit_bytes = int(torch.mps.recommended_max_memory())
+                if hasattr(torch.mps, "current_allocated_memory"):
+                    used_bytes = int(torch.mps.current_allocated_memory())
+                elif hasattr(torch.mps, "driver_allocated_memory"):
+                    used_bytes = int(torch.mps.driver_allocated_memory())
+                else:
+                    used_bytes = 0
+                return max(0, limit_bytes - used_bytes)
+    except RuntimeError:
+        return None
+
+    return None
+
+
+def _resolve_chunk_sizes(
+    *,
+    dimension: int,
+    max_tnt: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    pair_chunk: int | None,
+    a_chunk: int | None,
+) -> tuple[int, int]:
+    if pair_chunk is not None and pair_chunk <= 0:
+        raise ValueError("pair_chunk must be a positive integer")
+    if a_chunk is not None and a_chunk <= 0:
+        raise ValueError("a_chunk must be a positive integer")
+
+    if pair_chunk is not None and a_chunk is not None:
+        return pair_chunk, a_chunk
+
+    available_bytes = _get_available_device_memory(device)
+    if available_bytes is None:
+        return (
+            pair_chunk if pair_chunk is not None else _DEFAULT_PAIR_CHUNK,
+            a_chunk if a_chunk is not None else _DEFAULT_A_CHUNK,
+        )
+
+    budget_bytes = max(1, int(available_bytes * _AUTO_MEMORY_FRACTION))
+    dtype_nbytes = _dtype_nbytes(dtype)
+    n_tnt = 2 * max_tnt + 1
+    total_pairs = n_tnt * n_tnt
+
+    resolved_a_chunk = a_chunk
+    if resolved_a_chunk is None:
+        # The overworld path keeps several dense float grids alive at once.
+        bytes_per_cell = dtype_nbytes * 8
+        bytes_per_row = max(1, n_tnt * bytes_per_cell)
+        candidate = budget_bytes // bytes_per_row
+        candidate = max(1, min(candidate, n_tnt, _MAX_AUTO_A_CHUNK))
+        resolved_a_chunk = _align_chunk(candidate, _A_CHUNK_ALIGNMENT)
+
+    resolved_pair_chunk = pair_chunk
+    if resolved_pair_chunk is None:
+        # The end path keeps a larger set of 1-D working vectors per TNT pair.
+        bytes_per_pair = dtype_nbytes * 24 + 32
+        candidate = budget_bytes // max(1, bytes_per_pair)
+        candidate = max(1, min(candidate, total_pairs, _MAX_AUTO_PAIR_CHUNK))
+        resolved_pair_chunk = _align_chunk(candidate, _PAIR_CHUNK_ALIGNMENT)
+
+    if dimension == -1:
+        resolved_pair_chunk = (
+            pair_chunk if pair_chunk is not None else _DEFAULT_PAIR_CHUNK
+        )
+    else:
+        resolved_pair_chunk = min(resolved_pair_chunk, total_pairs)
+
+    resolved_a_chunk = min(resolved_a_chunk, n_tnt)
+    return resolved_pair_chunk, resolved_a_chunk
+
+
 def calculation(
     target_x: float,
     target_z: float,
@@ -67,8 +166,8 @@ def calculation(
     max_tnt: int,
     max_time: int,
     device: torch.device | None = None,
-    pair_chunk: int = 262_144,
-    a_chunk: int = 256,
+    pair_chunk: int | None = None,
+    a_chunk: int | None = None,
 ) -> list[dict]:
     if dimension not in (-1, 1):
         raise ValueError("dimension must be -1 or 1")
@@ -78,6 +177,14 @@ def calculation(
     if device is None:
         device = _get_device()
     dtype = _device_dtype(device)
+    pair_chunk, a_chunk = _resolve_chunk_sizes(
+        dimension=dimension,
+        max_tnt=max_tnt,
+        device=device,
+        dtype=dtype,
+        pair_chunk=pair_chunk,
+        a_chunk=a_chunk,
+    )
 
     target_x_t = torch.tensor(target_x, dtype=dtype, device=device)
     target_z_t = torch.tensor(target_z, dtype=dtype, device=device)
